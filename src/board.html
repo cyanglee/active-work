@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw board</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗂️</text></svg>">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1a1d21; --muted: #6b7280; --border: #e5e7eb;
+    --working: #16a34a; --waiting: #d97706; --review: #9333ea; --done: #9ca3af;
+    --accent: #2563eb; --error: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1a1f26; --text: #e6e8eb; --muted: #8b93a1; --border: #2a313b;
+      --working: #4ade80; --waiting: #fbbf24; --review: #c084fc; --done: #6b7280;
+      --accent: #60a5fa; --error: #f87171;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); padding: 24px 20px; max-width: 880px; margin: 0 auto;
+    font-family: ui-sans-serif, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  h1 { font-size: 20px; letter-spacing: .02em; }
+  #status { font-size: 12px; color: var(--muted); }
+  #status.err { color: var(--error); }
+  .toggle {
+    margin-left: auto; font-size: 13px; color: var(--muted);
+    display: flex; gap: 6px; align-items: center; cursor: pointer; user-select: none;
+  }
+  .empty { color: var(--muted); }
+  section.project { margin-bottom: 26px; }
+  .project h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted);
+    margin-bottom: 10px; display: flex; gap: 8px; align-items: baseline;
+  }
+  .project h2 .count {
+    font-weight: normal; background: var(--border); border-radius: 999px;
+    padding: 1px 8px; font-size: 11px; letter-spacing: 0;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--muted);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+  }
+  .card.working { border-left-color: var(--working); }
+  .card.waiting { border-left-color: var(--waiting); }
+  .card.review  { border-left-color: var(--review); }
+  .card.done    { border-left-color: var(--done); opacity: .6; }
+  .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+    padding: 1px 7px; border-radius: 4px; color: var(--card);
+  }
+  .badge.working { background: var(--working); }
+  .badge.waiting { background: var(--waiting); }
+  .badge.review  { background: var(--review); }
+  .badge.done    { background: var(--done); }
+  .id { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; color: var(--muted); }
+  .title { font-weight: 600; font-size: 15px; }
+  .age { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .summary { margin-top: 7px; font-size: 13.5px; line-height: 1.55; }
+  .next { margin-top: 6px; font-size: 13.5px; line-height: 1.55; }
+  .next::before { content: "→ "; color: var(--accent); font-weight: 700; }
+  .meta {
+    margin-top: 9px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .dirty { color: var(--waiting); font-weight: 700; }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 20%, var(--card)); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Active Work</h1>
+  <span id="status">loading…</span>
+  <label class="toggle"><input type="checkbox" id="showDone"> show done</label>
+</header>
+<main id="board"></main>
+<script>
+const POLL_MS = 2000;
+const board = document.getElementById('board');
+const status = document.getElementById('status');
+let lastStamp = {};
+let lastData = null;
+let showDone = false;
+
+document.getElementById('showDone').onchange = event => {
+  showDone = event.target.checked;
+  render(lastData);
+};
+
+function age(iso) {
+  const seconds = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+  return Math.floor(seconds / 86400) + 'd ago';
+}
+
+function esc(text) {
+  const span = document.createElement('span');
+  span.textContent = text;
+  return span.innerHTML;
+}
+
+function shortDir(directory) {
+  return directory.replace(/^\/Users\/[^/]+/, '~');
+}
+
+function render(data) {
+  if (!data) return;
+  const tasks = data.tasks.filter(task => showDone || task.state !== 'done');
+  if (tasks.length === 0) {
+    board.innerHTML = '<p class="empty">No active work.</p>';
+    return;
+  }
+  const groups = new Map();
+  for (const task of tasks) {
+    if (!groups.has(task.project)) groups.set(task.project, []);
+    groups.get(task.project).push(task);
+  }
+  let html = '';
+  for (const [project, list] of groups) {
+    html += `<section class="project"><h2>${esc(project)} <span class="count">${list.length}</span></h2>`;
+    for (const task of list) {
+      const changed = lastStamp[task.id] && lastStamp[task.id] !== task.updated_at;
+      html += `<article class="card ${task.state}${changed ? ' flash' : ''}">
+        <div class="top">
+          <span class="badge ${task.state}">${task.state}</span>
+          <span class="id">${esc(task.id)}</span>
+          <span class="title">${esc(task.title)}</span>
+          <span class="age">${age(task.updated_at)}</span>
+        </div>
+        ${task.summary ? `<p class="summary">${esc(task.summary)}</p>` : ''}
+        ${task.next ? `<p class="next">${esc(task.next)}</p>` : ''}
+        <div class="meta">
+          ${task.branch ? `<span>⎇ ${esc(task.branch)}${task.dirty ? '<span class="dirty">*</span>' : ''}</span>` : ''}
+          <span>${esc(shortDir(task.directory))}</span>
+        </div>
+      </article>`;
+    }
+    html += '</section>';
+  }
+  board.innerHTML = html;
+  for (const task of data.tasks) lastStamp[task.id] = task.updated_at;
+}
+
+async function tick() {
+  try {
+    const response = await fetch('/tasks.json', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    lastData = await response.json();
+    render(lastData);
+    status.textContent = 'updated ' + new Date().toLocaleTimeString();
+    status.classList.remove('err');
+  } catch (error) {
+    status.textContent = 'disconnected — retrying…';
+    status.classList.add('err');
+  }
+}
+
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>
