@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
-use tiny_http::{Header, Response, Server};
+use tiny_http::{Header, Method, Response, Server};
 
-use crate::Store;
+use crate::{State, Store};
 
 const BOARD_HTML: &str = include_str!("board.html");
 
@@ -15,20 +15,73 @@ pub fn run(store: &Store, port: u16) -> Result<()> {
     println!("aw board on http://{address} (Ctrl-C to stop)");
 
     for request in server.incoming_requests() {
-        let response = match request.url() {
-            "/" | "/index.html" => page(BOARD_HTML.to_owned(), "text/html; charset=utf-8", 200),
-            "/tasks.json" => match tasks_json(store) {
+        let url = request.url().to_owned();
+        let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
+        let response = match (request.method(), path) {
+            (Method::Get, "/" | "/index.html") => {
+                page(BOARD_HTML.to_owned(), "text/html; charset=utf-8", 200)
+            }
+            (Method::Get, "/tasks.json") => match tasks_json(store) {
                 Ok(payload) => page(payload, "application/json", 200),
-                Err(error) => {
-                    let body = serde_json::json!({ "error": error.to_string() }).to_string();
-                    page(body, "application/json", 500)
-                }
+                Err(error) => error_page(error),
             },
+            // The X-AW header forces a CORS preflight, which this server never
+            // answers — so cross-origin pages cannot fire these state changes.
+            (Method::Post, "/done") if has_aw_header(&request) => {
+                match set_state(store, query, State::Done) {
+                    Ok(payload) => page(payload, "application/json", 200),
+                    Err(error) => error_page(error),
+                }
+            }
+            (Method::Post, "/reopen") if has_aw_header(&request) => {
+                match set_state(store, query, State::Working) {
+                    Ok(payload) => page(payload, "application/json", 200),
+                    Err(error) => error_page(error),
+                }
+            }
+            (Method::Post, "/done" | "/reopen") => {
+                page("missing X-AW header".to_owned(), "text/plain", 403)
+            }
             _ => page("not found".to_owned(), "text/plain; charset=utf-8", 404),
         };
         let _ = request.respond(response);
     }
     Ok(())
+}
+
+/// Handle a board button: flip a task's state without touching its worktree
+/// binding (the server's cwd is unrelated to the task's directory).
+pub fn set_state(store: &Store, query: &str, state: State) -> Result<String> {
+    let id = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("id="))
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned);
+    let Some(id) = id else {
+        bail!("missing id parameter");
+    };
+    let task = store.edit(&id, |task| {
+        task.state = state;
+        if state == State::Done {
+            task.next.clear();
+            task.ask.clear();
+        }
+        task.updated_at = Utc::now();
+        Ok(())
+    })?;
+    serde_json::to_string(&task).context("could not serialize task")
+}
+
+fn has_aw_header(request: &tiny_http::Request) -> bool {
+    request
+        .headers()
+        .iter()
+        .any(|header| header.field.equiv("x-aw"))
+}
+
+fn error_page(error: anyhow::Error) -> Response<Cursor<Vec<u8>>> {
+    let body = serde_json::json!({ "error": error.to_string() }).to_string();
+    page(body, "application/json", 500)
 }
 
 pub fn tasks_json(store: &Store) -> Result<String> {
@@ -67,11 +120,37 @@ mod tests {
             state,
             summary: "Found the rounding point".to_owned(),
             next: "Run invoice specs".to_owned(),
+            ask: String::new(),
             updated_at: Utc::now(),
             directory: PathBuf::from("/tmp/clinicbase"),
             branch: Some("cb-142".to_owned()),
             dirty: Some(true),
+            agent: None,
+            session_id: None,
+            sessions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn board_done_button_completes_a_task_and_clears_its_cues() {
+        let directory = tempdir().unwrap();
+        let store = Store::new(directory.path());
+        let mut fixture = task("CB-1", State::Review);
+        fixture.ask = "A or B?".to_owned();
+        store.save(&fixture).unwrap();
+
+        set_state(&store, "id=CB-1", State::Done).unwrap();
+
+        let done = store.load("CB-1").unwrap();
+        assert_eq!(done.state, State::Done);
+        assert!(done.next.is_empty());
+        assert!(done.ask.is_empty());
+
+        set_state(&store, "id=CB-1", State::Working).unwrap();
+        assert_eq!(store.load("CB-1").unwrap().state, State::Working);
+
+        let missing = set_state(&store, "", State::Done).unwrap_err();
+        assert!(missing.to_string().contains("missing id"));
     }
 
     #[test]

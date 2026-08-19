@@ -1,92 +1,141 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aw board</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗂️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Noto+Serif+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #f6f7f9; --card: #ffffff; --text: #1a1d21; --muted: #6b7280; --border: #e5e7eb;
-    --working: #16a34a; --waiting: #d97706; --review: #9333ea; --done: #9ca3af;
-    --accent: #2563eb; --error: #dc2626;
+    color-scheme: light dark;
+    --bg:#faf8f3; --card:#fffefa; --text:#211d16; --muted:#847c6e; --border:#e7e1d3;
+    --working:#237a4b; --waiting:#b3610a; --review:#7440d6; --done:#a49c8c;
+    --accent:#1c4fd8; --error:#c22a1e; --accent-soft:#eef3ff;
+    --display:"Source Serif 4","Noto Serif TC","Songti TC",serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #111418; --card: #1a1f26; --text: #e6e8eb; --muted: #8b93a1; --border: #2a313b;
-      --working: #4ade80; --waiting: #fbbf24; --review: #c084fc; --done: #6b7280;
-      --accent: #60a5fa; --error: #f87171;
+      --bg:#14130f; --card:#1d1b16; --text:#ece7db; --muted:#948c7c; --border:#322e25;
+      --working:#4cc07f; --waiting:#e59b3c; --review:#a98af0; --done:#6f695d;
+      --accent:#7ea2ff; --error:#f0705f; --accent-soft:#1d2740;
     }
   }
-  * { box-sizing: border-box; margin: 0; }
+  * { box-sizing:border-box; margin:0; }
   body {
-    background: var(--bg); color: var(--text); padding: 24px 20px; max-width: 880px; margin: 0 auto;
-    font-family: ui-sans-serif, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+    background:var(--bg); color:var(--text); padding:30px 30px 52px; max-width:1680px; margin:0 auto;
+    font-family:"Source Serif 4","Noto Serif TC","Songti TC",serif;
   }
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
-  h1 { font-size: 20px; letter-spacing: .02em; }
-  #status { font-size: 12px; color: var(--muted); }
-  #status.err { color: var(--error); }
-  .toggle {
-    margin-left: auto; font-size: 13px; color: var(--muted);
-    display: flex; gap: 6px; align-items: center; cursor: pointer; user-select: none;
+  /* faint paper grain */
+  body::before {
+    content:""; position:fixed; inset:0; pointer-events:none; opacity:.5; z-index:0;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.02 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  .empty { color: var(--muted); }
-  section.project { margin-bottom: 26px; }
-  .project h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted);
-    margin-bottom: 10px; display: flex; gap: 8px; align-items: baseline;
+  header, main { position:relative; z-index:1; }
+
+  header { display:flex; align-items:baseline; gap:18px; flex-wrap:wrap; margin-bottom:8px; }
+  h1 { font-family:var(--display); font-weight:800; font-size:28px; letter-spacing:-.02em; }
+  .hb { display:flex; align-items:center; gap:9px; font-size:14px; color:var(--muted); font-family:var(--mono); }
+  .hb .dot { width:9px; height:9px; border-radius:50%; background:var(--working); }
+  .hb .dot.beat { animation:beat 1s ease-out; }
+  .hb.err .dot { background:var(--error); animation:none; }
+  @keyframes beat { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--working) 60%, transparent); }
+                    100% { box-shadow:0 0 0 10px transparent; } }
+  .toggle { margin-left:auto; font-size:14px; color:var(--muted); display:flex; gap:7px; align-items:center; cursor:pointer; user-select:none; }
+  .rule { border-bottom:2px solid var(--text); opacity:.85; margin-bottom:24px; }
+
+  .project { margin-bottom:38px; }
+  .project-head { display:flex; align-items:baseline; gap:12px; margin-bottom:16px;
+                  border-bottom:2px solid var(--phue-line); padding-bottom:8px; }
+  .project-head .swatch { width:13px; height:13px; border-radius:4px; background:var(--phue-line);
+                          align-self:center; flex:none; }
+  .project-head .pname { font-family:var(--display); font-size:23px; font-weight:700; }
+  .project-head .pcount { font-family:var(--mono); font-size:13px; color:var(--muted); }
+  .project-head .pstates { margin-left:auto; display:flex; gap:16px; }
+  .project-head .pstate { display:flex; align-items:center; gap:6px; font-family:var(--mono);
+                          font-size:12px; color:var(--muted); }
+  .project-head .pstate .sdot { width:8px; height:8px; }
+
+  .sdot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .sdot.working { background:var(--working); } .sdot.waiting { background:var(--waiting); }
+  .sdot.review { background:var(--review); }  .sdot.done { background:var(--done); }
+  .state-label { font-family:var(--mono); font-size:12px; font-weight:600; letter-spacing:.12em;
+                 text-transform:uppercase; }
+  .state-label.working { color:var(--working); } .state-label.waiting { color:var(--waiting); }
+  .state-label.review { color:var(--review); }   .state-label.done { color:var(--done); }
+
+  /* Tasks stack vertically inside a project: full-width rows on one
+     continuous project-colored rail, separated by hairlines. */
+  .rows { border-left:4px solid var(--phue-line); }
+  .row { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:8px 28px;
+         padding:16px 6px 15px 18px; border-bottom:1px solid var(--border); }
+  .row:last-child { border-bottom:none; }
+  .row.enter { animation:rise .35s ease-out backwards; }
+  @keyframes rise { from { opacity:0; transform:translateY(6px); } }
+  .row.done { opacity:.55; }
+  .row .head { grid-column:1; display:flex; align-items:baseline; gap:11px; }
+  .row .title { font-family:var(--display); font-size:19px; font-weight:700; line-height:1.35; }
+  .id { font-family:var(--mono); font-size:13px; color:var(--muted); }
+  .via { font-family:var(--mono); font-size:11.5px; font-weight:600; letter-spacing:.06em;
+         color:var(--muted); border:1px solid var(--border); border-radius:5px; padding:1px 7px; }
+  .row .state-tag { display:flex; align-items:center; gap:6px; position:relative; top:1px; }
+
+  /* Labeled 下一步 / 進度 rows sharing an aligned tag column */
+  .flow { grid-column:1; display:grid; grid-template-columns:58px 1fr; gap:7px 12px; }
+  .flow .tag { font-size:12.5px; font-weight:700; text-align:right; padding-top:6px;
+               letter-spacing:.08em; }
+  .flow .tag.ask { color:var(--waiting); }
+  .flow .tag.next { color:var(--accent); }
+  .flow .tag.now { color:var(--muted); }
+  .flow .text.ask { background:color-mix(in srgb, var(--waiting) 9%, var(--card));
+                    border:1px solid color-mix(in srgb, var(--waiting) 40%, transparent);
+                    border-radius:8px; padding:6px 13px;
+                    font-size:15.5px; font-weight:600; line-height:1.55; }
+  .flow .text.next { background:var(--accent-soft); border-radius:8px; padding:6px 13px;
+                     font-size:15.5px; font-weight:600; line-height:1.55; }
+  .flow .text.now { font-size:14px; color:var(--muted); line-height:1.65; padding:4px 2px 0; }
+  .flow .text.empty { color:var(--muted); font-style:italic; font-weight:400; }
+
+  /* Right-hand meta column: aligned across all rows for vertical scanning */
+  .side { grid-column:2; grid-row:1 / span 2; display:flex; flex-direction:column; gap:4px;
+          font-family:var(--mono); font-size:12.5px; color:var(--muted); padding-top:3px; }
+  .side .val { word-break:break-all; }
+  .side .resume { user-select:all; cursor:copy; color:var(--text); }
+  .side .act { align-self:flex-start; margin-top:4px; font-family:var(--mono); font-size:12px;
+               font-weight:600; color:var(--muted); background:none; cursor:pointer;
+               border:1px solid var(--border); border-radius:6px; padding:3px 11px; }
+  .side .act:hover { color:var(--working); border-color:var(--working); }
+  .side .act.reopen:hover { color:var(--accent); border-color:var(--accent); }
+  .side .act.armed { color:var(--error); border-color:var(--error); font-weight:700; }
+  @media (max-width: 980px) {
+    .row { grid-template-columns:1fr; }
+    .side { grid-column:1; grid-row:auto; }
   }
-  .project h2 .count {
-    font-weight: normal; background: var(--border); border-radius: 999px;
-    padding: 1px 8px; font-size: 11px; letter-spacing: 0;
-  }
-  .card {
-    background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--muted);
-    border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
-  }
-  .card.working { border-left-color: var(--working); }
-  .card.waiting { border-left-color: var(--waiting); }
-  .card.review  { border-left-color: var(--review); }
-  .card.done    { border-left-color: var(--done); opacity: .6; }
-  .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-  .badge {
-    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
-    padding: 1px 7px; border-radius: 4px; color: var(--card);
-  }
-  .badge.working { background: var(--working); }
-  .badge.waiting { background: var(--waiting); }
-  .badge.review  { background: var(--review); }
-  .badge.done    { background: var(--done); }
-  .id { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; color: var(--muted); }
-  .title { font-weight: 600; font-size: 15px; }
-  .age { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
-  .summary { margin-top: 7px; font-size: 13.5px; line-height: 1.55; }
-  .next { margin-top: 6px; font-size: 13.5px; line-height: 1.55; }
-  .next::before { content: "→ "; color: var(--accent); font-weight: 700; }
-  .meta {
-    margin-top: 9px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap;
-    font-family: ui-monospace, SFMono-Regular, monospace;
-  }
-  .dirty { color: var(--waiting); font-weight: 700; }
-  .flash { animation: flash 1.2s ease-out; }
-  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 20%, var(--card)); } }
+  .dirty { color:var(--waiting); font-weight:700; }
+  .flash { animation:flash 1.2s ease-out; }
+  @keyframes flash { from { background:color-mix(in srgb, var(--accent) 18%, var(--card)); } }
+  .empty-board { color:var(--muted); font-size:15px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Active Work</h1>
-  <span id="status">loading…</span>
+  <span class="hb" id="hb"><span class="dot" id="hbdot"></span><span id="hbtext">loading…</span></span>
   <label class="toggle"><input type="checkbox" id="showDone"> show done</label>
 </header>
+<div class="rule"></div>
 <main id="board"></main>
 <script>
 const POLL_MS = 2000;
 const board = document.getElementById('board');
-const status = document.getElementById('status');
+const STATE_ORDER = ['working', 'waiting', 'review', 'done'];
 let lastStamp = {};
 let lastData = null;
 let showDone = false;
+let firstRender = true;
 
 document.getElementById('showDone').onchange = event => {
   showDone = event.target.checked;
@@ -107,46 +156,139 @@ function esc(text) {
   return span.innerHTML;
 }
 
-function shortDir(directory) {
-  return directory.replace(/^\/Users\/[^/]+/, '~');
+function projectHue(name) {
+  let hash = 0;
+  for (const ch of name.toLowerCase()) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return hash % 360;
+}
+
+function resumeCommand(task) {
+  if (!task.agent || !task.session_id) return null;
+  if (task.agent === 'claude') return `claude --resume ${task.session_id}`;
+  if (task.agent === 'codex') return `codex resume ${task.session_id}`;
+  return `${task.agent} session ${task.session_id}`;
+}
+
+function byRecency(a, b) { return b.updated_at.localeCompare(a.updated_at); }
+
+// Two-step confirmation without confirm() dialogs: first click arms the
+// button (survives the 2s re-render via this map), second click executes.
+const armed = new Map();
+
+function actionButton(task) {
+  const action = task.state === 'done' ? 'reopen' : 'done';
+  const label = task.state === 'done' ? '↺ reopen' : '✓ done';
+  const isArmed = (armed.get(`${action}:${task.id}`) || 0) > Date.now();
+  return `<button class="act ${action}${isArmed ? ' armed' : ''}"
+    data-id="${esc(task.id)}" data-action="${action}">${isArmed ? '再點一次確認' : label}</button>`;
+}
+
+board.addEventListener('click', async event => {
+  const button = event.target.closest('button.act');
+  if (!button) return;
+  const key = `${button.dataset.action}:${button.dataset.id}`;
+  if ((armed.get(key) || 0) > Date.now()) {
+    armed.delete(key);
+    try {
+      await fetch(`/${button.dataset.action}?id=${encodeURIComponent(button.dataset.id)}`,
+        { method: 'POST', headers: { 'X-AW': '1' } });
+    } catch (error) { /* 下一次輪詢會反映實際狀態 */ }
+    tick();
+  } else {
+    armed.set(key, Date.now() + 4000);
+    render(lastData);
+    setTimeout(() => render(lastData), 4100);
+  }
+});
+
+const STATE_PRIORITY = { working: 0, waiting: 1, review: 2, done: 3 };
+
+function byStateThenRecency(a, b) {
+  const priority = STATE_PRIORITY[a.state] - STATE_PRIORITY[b.state];
+  return priority !== 0 ? priority : byRecency(a, b);
+}
+
+function rowHtml(task, index) {
+  const resume = resumeCommand(task);
+  const changed = lastStamp[task.id] && lastStamp[task.id] !== task.updated_at;
+  const enter = firstRender ? ` enter" style="animation-delay:${index * 45}ms` : '';
+  return `<article class="row ${task.state}${changed ? ' flash' : ''}${enter}">
+    <div class="head">
+      <span class="state-tag"><span class="sdot ${task.state}"></span></span>
+      <span class="title">${esc(task.title)}</span>
+      <span class="id">${esc(task.id)}</span>
+      ${task.agent ? `<span class="via">${esc(task.agent)}</span>` : ''}
+      <span class="state-label ${task.state}" style="margin-left:auto">${task.state}</span>
+    </div>
+    <div class="flow">
+      ${task.ask ? `<span class="tag ask">待決定</span>
+      <span class="text ask">${esc(task.ask)}</span>` : ''}
+      <span class="tag next">下一步</span>
+      <span class="text next${task.next ? '' : ' empty'}">${esc(task.next || '尚未設定下一步')}</span>
+      <span class="tag now">進度</span>
+      <span class="text now${task.summary ? '' : ' empty'}">${esc(task.summary || '尚未記錄進度')}</span>
+    </div>
+    <div class="side">
+      <span>${age(task.updated_at)}</span>
+      <span class="val">⎇ ${esc(task.branch || '—')}${task.dirty ? ' <span class="dirty">*</span>' : ''}</span>
+      ${resume ? `<span class="val resume" title="點一下全選，複製後貼到 terminal">${esc(resume)}</span>` : ''}
+      ${task.sessions && task.sessions.length > 1
+        ? `<span title="這個任務被 ${task.sessions.length} 個對話寫過，aw resume ${esc(task.id)} --list 可列出全部">+${task.sessions.length - 1} 個對話</span>`
+        : ''}
+      ${actionButton(task)}
+    </div>
+  </article>`;
 }
 
 function render(data) {
   if (!data) return;
-  const tasks = data.tasks.filter(task => showDone || task.state !== 'done');
-  if (tasks.length === 0) {
-    board.innerHTML = '<p class="empty">No active work.</p>';
-    return;
-  }
+  const visible = data.tasks
+    .filter(task => showDone || task.state !== 'done')
+    .sort(byRecency);
+
+  // Group case-insensitively; display the first spelling encountered.
   const groups = new Map();
-  for (const task of tasks) {
-    if (!groups.has(task.project)) groups.set(task.project, []);
-    groups.get(task.project).push(task);
+  for (const task of visible) {
+    const key = task.project.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { name: task.project, tasks: [] });
+    groups.get(key).tasks.push(task);
   }
+  for (const group of groups.values()) group.tasks.sort(byStateThenRecency);
+
   let html = '';
-  for (const [project, list] of groups) {
-    html += `<section class="project"><h2>${esc(project)} <span class="count">${list.length}</span></h2>`;
-    for (const task of list) {
-      const changed = lastStamp[task.id] && lastStamp[task.id] !== task.updated_at;
-      html += `<article class="card ${task.state}${changed ? ' flash' : ''}">
-        <div class="top">
-          <span class="badge ${task.state}">${task.state}</span>
-          <span class="id">${esc(task.id)}</span>
-          <span class="title">${esc(task.title)}</span>
-          <span class="age">${age(task.updated_at)}</span>
-        </div>
-        ${task.summary ? `<p class="summary">${esc(task.summary)}</p>` : ''}
-        ${task.next ? `<p class="next">${esc(task.next)}</p>` : ''}
-        <div class="meta">
-          ${task.branch ? `<span>⎇ ${esc(task.branch)}${task.dirty ? '<span class="dirty">*</span>' : ''}</span>` : ''}
-          <span>${esc(shortDir(task.directory))}</span>
-        </div>
-      </article>`;
-    }
-    html += '</section>';
+  let index = 0;
+  for (const { name: project, tasks } of groups.values()) {
+    const hue = projectHue(project);
+    const counts = {};
+    for (const task of tasks) counts[task.state] = (counts[task.state] || 0) + 1;
+    const states = STATE_ORDER.filter(state => counts[state])
+      .map(state => `<span class="pstate"><span class="sdot ${state}"></span>${state} ${counts[state]}</span>`)
+      .join('');
+    html += `<section class="project"
+        style="--phue-line:light-dark(hsla(${hue},55%,45%,.55), hsla(${hue},65%,65%,.6))">
+      <div class="project-head">
+        <span class="swatch"></span>
+        <span class="pname">${esc(project)}</span>
+        <span class="pcount">${tasks.length} task${tasks.length > 1 ? 's' : ''}</span>
+        <span class="pstates">${states}</span>
+      </div>
+      <div class="rows">${tasks.map(task => rowHtml(task, index++)).join('')}</div>
+    </section>`;
   }
-  board.innerHTML = html;
+
+  board.innerHTML = html || '<p class="empty-board">No active work.</p>';
+  firstRender = false;
   for (const task of data.tasks) lastStamp[task.id] = task.updated_at;
+}
+
+function heartbeat(ok, latest) {
+  const hb = document.getElementById('hb');
+  const dot = document.getElementById('hbdot');
+  hb.classList.toggle('err', !ok);
+  document.getElementById('hbtext').textContent = ok
+    ? `sync ${new Date().toLocaleTimeString()} · latest change ${latest ? age(latest) : '—'}`
+    : 'disconnected — retrying…';
+  if (ok) { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); }
 }
 
 async function tick() {
@@ -155,11 +297,10 @@ async function tick() {
     if (!response.ok) throw new Error('HTTP ' + response.status);
     lastData = await response.json();
     render(lastData);
-    status.textContent = 'updated ' + new Date().toLocaleTimeString();
-    status.classList.remove('err');
+    const latest = lastData.tasks.reduce((max, task) => task.updated_at > max ? task.updated_at : max, '');
+    heartbeat(true, latest);
   } catch (error) {
-    status.textContent = 'disconnected — retrying…';
-    status.classList.add('err');
+    heartbeat(false, null);
   }
 }
 

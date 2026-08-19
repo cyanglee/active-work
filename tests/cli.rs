@@ -140,9 +140,15 @@ fn start_allocates_an_id_and_current_resolves_it_by_worktree() {
     assert!(current.status.success(), "{}", stderr(&current));
     assert_eq!(stdout(&current), "AW-0001\n");
 
-    let duplicate = aw_in(home.path(), &first, &["start", "--title", "Other task"]);
-    assert!(!duplicate.status.success());
-    assert!(stderr(&duplicate).contains("already active"));
+    // The same worktree can hold several active tasks; `current --id-only`
+    // lists them all, newest first, one per line.
+    let sibling = aw_in(home.path(), &first, &["start", "--title", "Other task"]);
+    assert!(sibling.status.success(), "{}", stderr(&sibling));
+    assert_eq!(stdout(&sibling), "Started AW-0002\n");
+
+    let both = aw_in(home.path(), &first, &["current", "--id-only"]);
+    assert!(both.status.success(), "{}", stderr(&both));
+    assert_eq!(stdout(&both), "AW-0002\nAW-0001\n");
 
     let next = aw_in(home.path(), &second, &["start", "--title", "Second task"]);
     assert!(next.status.success(), "{}", stderr(&next));

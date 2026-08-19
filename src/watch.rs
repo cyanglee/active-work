@@ -42,7 +42,10 @@ pub fn render_watch(tasks: &[Task], all: bool, now: DateTime<Utc>) -> String {
     // Tasks arrive sorted by recency; groups keep the order of first appearance.
     let mut groups: Vec<(&str, Vec<&Task>)> = Vec::new();
     for task in visible {
-        match groups.iter_mut().find(|(name, _)| *name == task.project) {
+        match groups
+            .iter_mut()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&task.project))
+        {
             Some((_, list)) => list.push(task),
             None => groups.push((&task.project, vec![task])),
         }
@@ -61,6 +64,10 @@ pub fn render_watch(tasks: &[Task], all: bool, now: DateTime<Utc>) -> String {
                 task.title,
                 relative_age(task.updated_at, now)
             ));
+            if !task.ask.is_empty() {
+                let waiting = state_color(State::Waiting);
+                output.push_str(&format!("      {waiting}⚑ {}{RESET}\n", task.ask));
+            }
             if !task.summary.is_empty() {
                 output.push_str(&format!("      {}\n", task.summary));
             }
@@ -110,10 +117,14 @@ mod tests {
             state,
             summary: "Found the rounding point".to_owned(),
             next: "Run invoice specs".to_owned(),
+            ask: String::new(),
             updated_at: Utc::now(),
             directory: PathBuf::from("/tmp/clinicbase"),
             branch: Some("cb-142".to_owned()),
             dirty: Some(true),
+            agent: None,
+            session_id: None,
+            sessions: Vec::new(),
         }
     }
 

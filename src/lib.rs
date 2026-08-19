@@ -33,25 +33,61 @@ pub enum Command {
         title: String,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         summary: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         next: Option<String>,
+        /// A decision the user must make before work continues.
+        #[arg(long, allow_hyphen_values = true)]
+        ask: Option<String>,
+        /// Recording agent (claude, codex, ...). Auto-detected from the
+        /// environment when omitted.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Conversation/session ID used by `aw resume`. Auto-detected from the
+        /// environment when omitted.
+        #[arg(long)]
+        session_id: Option<String>,
     },
     /// Update the current cue for a task.
     Update {
         id: String,
         #[arg(long)]
         state: Option<State>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         summary: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         next: Option<String>,
+        /// A decision the user must make before work continues; pass an empty
+        /// string to clear it once resolved.
+        #[arg(long, allow_hyphen_values = true)]
+        ask: Option<String>,
+        /// Recording agent (claude, codex, ...). Auto-detected from the
+        /// environment when omitted.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Conversation/session ID used by `aw resume`. Auto-detected from the
+        /// environment when omitted.
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// Print (or launch) the command that resumes a task's conversation.
+    Resume {
+        /// Task ID; defaults to the active task of the current worktree.
+        id: Option<String>,
+        /// Launch the resume command inside the task's directory instead of
+        /// printing it.
+        #[arg(long)]
+        exec: bool,
+        /// List every conversation recorded for the task instead of resuming
+        /// only the most recent one.
+        #[arg(long)]
+        list: bool,
     },
     /// Mark a task as done.
     Done {
         id: String,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         summary: Option<String>,
     },
     /// List tasks. Done tasks are hidden unless --all is supplied.
@@ -125,6 +161,26 @@ pub struct Task {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dirty: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// A pending decision the user needs to make before work continues.
+    /// Set with `--ask`, cleared with `--ask ""` or `aw done`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ask: String,
+    /// Every conversation that has written this task. `agent`/`session_id`
+    /// above always mirror the most recent writer; this list keeps the rest
+    /// from being overwritten.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<TaskSession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskSession {
+    pub agent: String,
+    pub session_id: String,
+    pub last_seen: DateTime<Utc>,
 }
 
 impl Task {
@@ -134,6 +190,90 @@ impl Task {
         self.dirty = context.dirty;
         self.updated_at = Utc::now();
     }
+
+    fn record_session(&mut self, session: AgentSession) {
+        if let (Some(agent), Some(session_id)) = (&session.agent, &session.session_id) {
+            let entry = self
+                .sessions
+                .iter_mut()
+                .find(|known| known.agent == *agent && known.session_id == *session_id);
+            match entry {
+                Some(known) => known.last_seen = Utc::now(),
+                None => self.sessions.push(TaskSession {
+                    agent: agent.clone(),
+                    session_id: session_id.clone(),
+                    last_seen: Utc::now(),
+                }),
+            }
+        }
+        if session.agent.is_some() {
+            self.agent = session.agent;
+        }
+        if session.session_id.is_some() {
+            self.session_id = session.session_id;
+        }
+    }
+}
+
+/// Which agent conversation is writing this task, resolved from explicit flags
+/// first, then environment variables (AW_AGENT/AW_SESSION_ID override the
+/// agent-specific ones so wrappers can claim authorship).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentSession {
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
+}
+
+impl AgentSession {
+    pub fn detect(agent: Option<String>, session_id: Option<String>) -> Self {
+        let environment = Self::from_environment();
+        Self {
+            agent: agent.or(environment.agent),
+            session_id: session_id.or(environment.session_id),
+        }
+    }
+
+    fn from_environment() -> Self {
+        if env_nonempty("AW_AGENT").is_some() || env_nonempty("AW_SESSION_ID").is_some() {
+            return Self {
+                agent: env_nonempty("AW_AGENT"),
+                session_id: env_nonempty("AW_SESSION_ID"),
+            };
+        }
+        if let Some(session_id) = env_nonempty("CLAUDE_CODE_SESSION_ID") {
+            return Self {
+                agent: Some("claude".to_owned()),
+                session_id: Some(session_id),
+            };
+        }
+        if let Some(session_id) = env_nonempty("CODEX_SESSION_ID") {
+            return Self {
+                agent: Some("codex".to_owned()),
+                session_id: Some(session_id),
+            };
+        }
+        Self::default()
+    }
+}
+
+fn env_nonempty(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// The argv that resumes a conversation for a known agent.
+pub fn resume_argv(agent: &str, session_id: &str) -> Result<Vec<String>> {
+    let argv: Vec<&str> = match agent {
+        "claude" => vec!["claude", "--resume", session_id],
+        "codex" => vec!["codex", "resume", session_id],
+        other => bail!(
+            "no resume recipe for agent {other:?}; its session ID is {session_id} — \
+             resume it with that agent's own CLI"
+        ),
+    };
+    Ok(argv.into_iter().map(str::to_owned).collect())
 }
 
 #[derive(Debug)]
@@ -243,14 +383,6 @@ impl Store {
             }
 
             let task = build(id);
-            let active = self.active_in_directory_unlocked(&task.directory)?;
-            if let Some(existing) = active.first() {
-                bail!(
-                    "task {} is already active in {}; use `aw current` or a separate worktree",
-                    existing.id,
-                    task.directory.display()
-                );
-            }
             self.save_unlocked(&task)?;
             Ok(task)
         })
@@ -342,6 +474,35 @@ impl Store {
         }
     }
 
+    /// Reuse the spelling of an existing project whose name matches
+    /// case-insensitively, so "yourclinic" and "YourClinic" never split into
+    /// two projects. Best-effort: unreadable task files are skipped rather
+    /// than failing the `aw start` that asked.
+    pub fn canonical_project_name(&self, requested: String) -> Result<String> {
+        let tasks_dir = self.tasks_dir();
+        if !tasks_dir.exists() {
+            return Ok(requested);
+        }
+        for entry in fs::read_dir(&tasks_dir)
+            .with_context(|| format!("could not read {}", tasks_dir.display()))?
+        {
+            let path = entry?.path();
+            if path.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let Ok(file) = File::open(&path) else {
+                continue;
+            };
+            let Ok(task) = serde_json::from_reader::<_, Task>(BufReader::new(file)) else {
+                continue;
+            };
+            if task.project.eq_ignore_ascii_case(&requested) {
+                return Ok(task.project);
+            }
+        }
+        Ok(requested)
+    }
+
     pub fn list(&self) -> Result<Vec<Task>> {
         let tasks_dir = self.tasks_dir();
         if !tasks_dir.exists() {
@@ -401,20 +562,33 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
             project,
             summary,
             next,
+            ask,
+            agent,
+            session_id,
         } => {
             let context = WorkContext::detect(current_dir);
-            let resolved_project = project.unwrap_or_else(|| context.project.clone());
-            let task = store.create(id, |id| Task {
-                id,
-                project: resolved_project,
-                title,
-                state: State::Working,
-                summary: summary.unwrap_or_default(),
-                next: next.unwrap_or_default(),
-                updated_at: Utc::now(),
-                directory: context.directory,
-                branch: context.branch,
-                dirty: context.dirty,
+            let session = AgentSession::detect(agent, session_id);
+            let resolved_project =
+                store.canonical_project_name(project.unwrap_or_else(|| context.project.clone()))?;
+            let task = store.create(id, |id| {
+                let mut task = Task {
+                    id,
+                    project: resolved_project,
+                    title,
+                    state: State::Working,
+                    summary: summary.unwrap_or_default(),
+                    next: next.unwrap_or_default(),
+                    ask: ask.unwrap_or_default(),
+                    updated_at: Utc::now(),
+                    directory: context.directory,
+                    branch: context.branch,
+                    dirty: context.dirty,
+                    agent: None,
+                    session_id: None,
+                    sessions: Vec::new(),
+                };
+                task.record_session(session);
+                task
             })?;
             Ok(format!("Started {}", task.id))
         }
@@ -423,9 +597,12 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
             state,
             summary,
             next,
+            ask,
+            agent,
+            session_id,
         } => {
-            if state.is_none() && summary.is_none() && next.is_none() {
-                bail!("provide at least one of --state, --summary, or --next");
+            if state.is_none() && summary.is_none() && next.is_none() && ask.is_none() {
+                bail!("provide at least one of --state, --summary, --next, or --ask");
             }
 
             store.edit(&id, |task| {
@@ -438,10 +615,84 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
                 if let Some(next) = next {
                     task.next = next;
                 }
+                if let Some(ask) = ask {
+                    task.ask = ask;
+                }
+                task.record_session(AgentSession::detect(agent, session_id));
                 task.refresh_context(WorkContext::detect(current_dir));
                 Ok(())
             })?;
             Ok(format!("Updated {id}"))
+        }
+        Command::Resume { id, exec, list } => {
+            let task = match id {
+                Some(id) => store.load(&id)?,
+                None => {
+                    let context = WorkContext::detect(current_dir);
+                    let mut tasks = store.active_in_directory(&context.directory)?;
+                    match tasks.len() {
+                        0 => bail!(
+                            "no active task in {}; pass a task ID",
+                            context.directory.display()
+                        ),
+                        1 => tasks.remove(0),
+                        _ => {
+                            let ids = tasks
+                                .iter()
+                                .map(|task| task.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            bail!("multiple active tasks in this worktree: {ids}; pass a task ID")
+                        }
+                    }
+                }
+            };
+            if list {
+                if task.sessions.is_empty() {
+                    bail!("task {} has no recorded conversations", task.id);
+                }
+                let mut lines = Vec::new();
+                for known in task.sessions.iter().rev() {
+                    let command = resume_argv(&known.agent, &known.session_id)
+                        .map(|argv| argv.join(" "))
+                        .unwrap_or_else(|_| {
+                            format!("({} session {})", known.agent, known.session_id)
+                        });
+                    lines.push(format!(
+                        "{}  last seen {}  {}",
+                        known.agent,
+                        known.last_seen.format("%Y-%m-%d %H:%M UTC"),
+                        command
+                    ));
+                }
+                return Ok(lines.join("\n"));
+            }
+            let agent = task.agent.as_deref().with_context(|| {
+                format!("task {} has no recorded agent; nothing to resume", task.id)
+            })?;
+            let session_id = task.session_id.as_deref().with_context(|| {
+                format!("task {} has no recorded session ID; nothing to resume", task.id)
+            })?;
+            let argv = resume_argv(agent, session_id)?;
+
+            if exec {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    let error = ProcessCommand::new(&argv[0])
+                        .args(&argv[1..])
+                        .current_dir(&task.directory)
+                        .exec();
+                    bail!("could not launch {}: {error}", argv[0]);
+                }
+                #[cfg(not(unix))]
+                bail!("--exec is only supported on unix");
+            }
+            Ok(format!(
+                "cd '{}' && {}",
+                task.directory.display(),
+                argv.join(" ")
+            ))
         }
         Command::Done { id, summary } => {
             store.edit(&id, |task| {
@@ -450,6 +701,7 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
                     task.summary = summary;
                 }
                 task.next.clear();
+                task.ask.clear();
                 task.refresh_context(WorkContext::detect(current_dir));
                 Ok(())
             })?;
@@ -466,21 +718,20 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
         Command::Current { id_only } => {
             let context = WorkContext::detect(current_dir);
             let tasks = store.active_in_directory(&context.directory)?;
-            match tasks.as_slice() {
-                [] => bail!(
+            if tasks.is_empty() {
+                bail!(
                     "no active task in {}; run `aw start --title ...`",
                     context.directory.display()
-                ),
-                [task] if id_only => Ok(task.id.clone()),
-                [task] => Ok(render_tasks(std::slice::from_ref(task), false)),
-                tasks => {
-                    let ids = tasks
-                        .iter()
-                        .map(|task| task.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    bail!("multiple active tasks in this worktree: {ids}; specify a task ID")
-                }
+                );
+            }
+            if id_only {
+                Ok(tasks
+                    .iter()
+                    .map(|task| task.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            } else {
+                Ok(render_tasks(&tasks, false))
             }
         }
         // Long-running commands are dispatched in main before execute is reached.
@@ -498,14 +749,22 @@ pub fn render_tasks(tasks: &[Task], all: bool) -> String {
 
     let mut output = format!("{heading}\n");
     for task in tasks {
+        let via = task
+            .agent
+            .as_deref()
+            .map(|agent| format!("  (via {agent})"))
+            .unwrap_or_default();
         output.push_str(&format!(
-            "\n{} {}  [{}] {} · {}\n",
+            "\n{} {}  [{}] {} · {}{via}\n",
             task.state.marker(),
             task.id,
             task.state,
             task.project,
             task.title
         ));
+        if !task.ask.is_empty() {
+            output.push_str(&format!("  ⚑ {}\n", task.ask));
+        }
         if !task.summary.is_empty() {
             output.push_str(&format!("  {}\n", task.summary));
         }
@@ -544,15 +803,129 @@ mod tests {
             state: State::Working,
             summary: "Found the rounding point".to_owned(),
             next: "Run invoice specs".to_owned(),
+            ask: String::new(),
             updated_at: Utc::now(),
             directory: PathBuf::from("/tmp/clinicbase"),
             branch: Some("cb-142".to_owned()),
             dirty: Some(true),
+            agent: Some("claude".to_owned()),
+            session_id: Some("abc-123".to_owned()),
+            sessions: vec![TaskSession {
+                agent: "claude".to_owned(),
+                session_id: "abc-123".to_owned(),
+                last_seen: Utc::now(),
+            }],
         };
 
         store.save(&task).unwrap();
 
         assert_eq!(store.load("CB-142").unwrap(), task);
+    }
+
+    #[test]
+    fn loads_tasks_written_before_agent_fields_existed() {
+        let directory = tempdir().unwrap();
+        let store = Store::new(directory.path());
+        let tasks_dir = directory.path().join("tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("AW-0001.json"),
+            r#"{"id":"AW-0001","project":"demo","title":"Old task","state":"working",
+                "summary":"","next":"","updated_at":"2026-01-01T00:00:00Z",
+                "directory":"/tmp/demo"}"#,
+        )
+        .unwrap();
+
+        let task = store.load("AW-0001").unwrap();
+
+        assert_eq!(task.agent, None);
+        assert_eq!(task.session_id, None);
+        assert!(task.sessions.is_empty());
+        assert!(task.ask.is_empty());
+    }
+
+    #[test]
+    fn project_names_reuse_existing_spelling_case_insensitively() {
+        let directory = tempdir().unwrap();
+        let store = Store::new(directory.path());
+        let task = Task {
+            id: "AW-0001".to_owned(),
+            project: "YourClinic".to_owned(),
+            title: "A task".to_owned(),
+            state: State::Working,
+            summary: String::new(),
+            next: String::new(),
+            ask: String::new(),
+            updated_at: Utc::now(),
+            directory: PathBuf::from("/tmp/demo"),
+            branch: None,
+            dirty: None,
+            agent: None,
+            session_id: None,
+            sessions: Vec::new(),
+        };
+        store.save(&task).unwrap();
+
+        let canonical = store
+            .canonical_project_name("yourclinic".to_owned())
+            .unwrap();
+        let fresh = store.canonical_project_name("Landtop".to_owned()).unwrap();
+
+        assert_eq!(canonical, "YourClinic");
+        assert_eq!(fresh, "Landtop");
+    }
+
+    #[test]
+    fn record_session_keeps_every_conversation_without_duplicates() {
+        let mut task = Task {
+            id: "AW-0001".to_owned(),
+            project: "demo".to_owned(),
+            title: "A task".to_owned(),
+            state: State::Working,
+            summary: String::new(),
+            next: String::new(),
+            ask: String::new(),
+            updated_at: Utc::now(),
+            directory: PathBuf::from("/tmp/demo"),
+            branch: None,
+            dirty: None,
+            agent: None,
+            session_id: None,
+            sessions: Vec::new(),
+        };
+
+        task.record_session(AgentSession {
+            agent: Some("claude".to_owned()),
+            session_id: Some("s-1".to_owned()),
+        });
+        task.record_session(AgentSession {
+            agent: Some("codex".to_owned()),
+            session_id: Some("s-2".to_owned()),
+        });
+        task.record_session(AgentSession {
+            agent: Some("claude".to_owned()),
+            session_id: Some("s-1".to_owned()),
+        });
+
+        assert_eq!(task.sessions.len(), 2);
+        assert_eq!(task.agent.as_deref(), Some("claude"));
+        assert_eq!(task.session_id.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn resume_argv_knows_claude_and_codex() {
+        assert_eq!(
+            resume_argv("claude", "abc").unwrap(),
+            vec!["claude", "--resume", "abc"]
+        );
+        assert_eq!(
+            resume_argv("codex", "abc").unwrap(),
+            vec!["codex", "resume", "abc"]
+        );
+
+        let error = resume_argv("agy", "abc").unwrap_err().to_string();
+        assert!(error.contains("no resume recipe"));
+        assert!(error.contains("abc"));
     }
 
     #[test]
@@ -574,15 +947,21 @@ mod tests {
             state: State::Working,
             summary: "Found the rounding point".to_owned(),
             next: "Run invoice specs".to_owned(),
+            ask: "Decide: A or B?".to_owned(),
             updated_at: Utc::now(),
             directory: PathBuf::from("/tmp/clinicbase"),
             branch: None,
             dirty: None,
+            agent: Some("claude".to_owned()),
+            session_id: None,
+            sessions: Vec::new(),
         };
 
         let output = render_tasks(&[task], false);
 
         assert!(output.contains("Found the rounding point"));
         assert!(output.contains("→ Run invoice specs"));
+        assert!(output.contains("(via claude)"));
+        assert!(output.contains("⚑ Decide: A or B?"));
     }
 }

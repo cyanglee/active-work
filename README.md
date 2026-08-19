@@ -12,6 +12,15 @@ snapshot that gets replaced when its cue changes.
 ## Install
 
 ```bash
+./install.sh
+```
+
+This installs the `aw` binary (`cargo install`) and symlinks the Claude Code /
+Codex integrations (skills + hooks) from `integrations/` into place, so a
+`git pull` here updates them everywhere. One manual step — registering the two
+hooks — is documented in `integrations/README.md`. Binary only:
+
+```bash
 cargo install --path .
 ```
 
@@ -59,9 +68,10 @@ When no ID is supplied, `aw start` allocates a local, human-readable ID such as
 share the same `AW_HOME` cannot receive the same ID. A manual ID such as
 `CB-142` is still accepted and can never overwrite an existing task.
 
-Use `aw current --id-only` to resolve the one active task associated with the
-current Git worktree. `aw` intentionally allows only one active task per
-worktree; use another worktree when another writing agent needs a separate task.
+Use `aw current` to see the active tasks bound to the current Git worktree
+(`--id-only` prints one ID per line, newest first). A worktree may hold
+several active tasks at once — register one task per piece of work and keep
+each cue scoped to its own task.
 
 By default, task files live in `~/.agent-work/tasks`. Set `AW_HOME` to use a
 different location. Git directory, branch, and dirty state are captured from
