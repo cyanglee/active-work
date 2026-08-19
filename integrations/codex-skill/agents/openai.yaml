@@ -1,0 +1,6 @@
+interface:
+  display_name: "Active Work"
+  short_description: "Keep a concise cue for the current worktree"
+  default_prompt: "Use $aw to track this task and keep its current cue up to date."
+policy:
+  allow_implicit_invocation: false

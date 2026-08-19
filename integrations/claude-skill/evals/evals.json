@@ -1,0 +1,26 @@
+{
+  "skill_name": "aw",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "start-tracking",
+      "prompt": "我剛開始要在 /Users/take5/workspace/playground/active-work 這個專案修一個 bug：`aw list --all` 的排序在同一秒建立的任務之間不穩定。幫我把這件工作記錄到我的 active work 追蹤板上。",
+      "expected_output": "Runs `aw start` from inside the project directory with a sensible --project/--title and one-line --summary/--next; reports the allocated task ID.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "eval_name": "query-board",
+      "prompt": "幫我看一下我的 active work 板上現在有哪些正在進行的工作？",
+      "expected_output": "Runs `aw` / `aw list` and relays the board: 2 active tasks (yxs flaky spec, ClinicBase refactor), done task hidden unless asked.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "eval_name": "wrap-up-update",
+      "prompt": "我在 /Users/take5/workspace/playground/active-work 這邊剛跑完 invoice specs，全部綠了，接下來要把 rounding helper 抽成獨立 module。幫我更新工作狀態。",
+      "expected_output": "Resolves the active task (aw current --id-only or from list), then `aw update <id>` with a fresh one-line --summary and --next; does NOT change state or mark done.",
+      "files": []
+    }
+  ]
+}
