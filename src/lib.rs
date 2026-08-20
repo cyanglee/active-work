@@ -84,6 +84,23 @@ pub enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Record a work heartbeat for the task this conversation is writing.
+    /// Meant to be called from PostToolUse hooks; reads the hook JSON on
+    /// stdin for the session ID, falling back to environment detection.
+    Ping,
+    /// Report active time per task, merged from heartbeats. Two heartbeats
+    /// closer than --gap seconds count as continuous work; larger gaps are
+    /// idle and excluded.
+    Time {
+        /// Task ID; defaults to every task with recorded time.
+        id: Option<String>,
+        /// Restrict to one month (YYYY-MM, local time).
+        #[arg(long)]
+        month: Option<String>,
+        /// Seconds between heartbeats that still count as continuous work.
+        #[arg(long, default_value_t = 300)]
+        gap: i64,
+    },
     /// Mark a task as done.
     Done {
         id: String,
@@ -261,6 +278,70 @@ fn env_nonempty(key: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+pub const PING_DEDUPE_SECONDS: i64 = 30;
+
+/// Merge heartbeats into worked time: the sum of gaps between consecutive
+/// pings that are close enough to count as continuous work. Isolated pings
+/// contribute nothing — better to undercount a blip than invent time.
+pub fn active_seconds(pings: &[i64], gap: i64) -> i64 {
+    pings
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .filter(|delta| *delta > 0 && *delta <= gap)
+        .sum()
+}
+
+pub fn human_duration(seconds: i64) -> String {
+    let minutes = seconds / 60;
+    if minutes < 1 {
+        "<1m".to_owned()
+    } else if minutes < 60 {
+        format!("{minutes}m")
+    } else {
+        format!("{}h {:02}m", minutes / 60, minutes % 60)
+    }
+}
+
+fn month_range_local(month: &str) -> Result<(i64, i64)> {
+    use chrono::TimeZone;
+    let (year, mon) = month
+        .split_once('-')
+        .context("month must look like 2026-08")?;
+    let year: i32 = year.parse().context("month must look like 2026-08")?;
+    let mon: u32 = mon.parse().context("month must look like 2026-08")?;
+    let start = chrono::NaiveDate::from_ymd_opt(year, mon, 1).context("invalid month")?;
+    let end = if mon == 12 {
+        chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(year, mon + 1, 1)
+    }
+    .context("invalid month")?;
+    let to_epoch = |date: chrono::NaiveDate| {
+        chrono::Local
+            .from_local_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight is valid"))
+            .earliest()
+            .map(|moment| moment.timestamp())
+            .context("could not resolve local midnight")
+    };
+    Ok((to_epoch(start)?, to_epoch(end)?))
+}
+
+fn ping_session_id() -> Option<String> {
+    use std::io::{IsTerminal, Read};
+    let mut stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        let mut buffer = String::new();
+        if stdin.read_to_string(&mut buffer).is_ok()
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&buffer)
+            && let Some(id) = value.get("session_id").and_then(|id| id.as_str())
+            && !id.is_empty()
+        {
+            return Some(id.to_owned());
+        }
+    }
+    AgentSession::detect(None, None).session_id
 }
 
 /// The argv that resumes a conversation for a known agent.
@@ -474,6 +555,48 @@ impl Store {
         }
     }
 
+    fn heartbeats_dir(&self) -> PathBuf {
+        self.root.join("heartbeats")
+    }
+
+    fn heartbeat_path(&self, id: &str) -> Result<PathBuf> {
+        validate_task_id(id)?;
+        Ok(self.heartbeats_dir().join(format!("{id}.log")))
+    }
+
+    /// Append a heartbeat for the task, deduplicated to one per
+    /// PING_DEDUPE_SECONDS so hook traffic stays cheap and files stay small.
+    pub fn record_ping(&self, id: &str, now: i64) -> Result<bool> {
+        if let Some(last) = self.pings(id)?.last()
+            && now - last < PING_DEDUPE_SECONDS
+        {
+            return Ok(false);
+        }
+        let path = self.heartbeat_path(id)?;
+        fs::create_dir_all(self.heartbeats_dir())?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        writeln!(file, "{now}")?;
+        Ok(true)
+    }
+
+    /// All heartbeat timestamps recorded for a task, oldest first.
+    pub fn pings(&self, id: &str) -> Result<Vec<i64>> {
+        let path = self.heartbeat_path(id)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let contents =
+            fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+        Ok(contents
+            .lines()
+            .filter_map(|line| line.trim().parse::<i64>().ok())
+            .collect())
+    }
+
     /// Reuse the spelling of an existing project whose name matches
     /// case-insensitively, so "yourclinic" and "YourClinic" never split into
     /// two projects. Best-effort: unreadable task files are skipped rather
@@ -590,6 +713,7 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
                 task.record_session(session);
                 task
             })?;
+            let _ = store.record_ping(&task.id, Utc::now().timestamp());
             Ok(format!("Started {}", task.id))
         }
         Command::Update {
@@ -622,7 +746,69 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
                 task.refresh_context(WorkContext::detect(current_dir));
                 Ok(())
             })?;
+            let _ = store.record_ping(&id, Utc::now().timestamp());
             Ok(format!("Updated {id}"))
+        }
+        Command::Ping => {
+            let Some(session_id) = ping_session_id() else {
+                return Ok(String::new());
+            };
+            let candidate = store
+                .list()?
+                .into_iter()
+                .filter(|task| task.state != State::Done)
+                .filter(|task| {
+                    task.sessions
+                        .iter()
+                        .any(|known| known.session_id == session_id)
+                })
+                .max_by_key(|task| {
+                    task.sessions
+                        .iter()
+                        .filter(|known| known.session_id == session_id)
+                        .map(|known| known.last_seen)
+                        .max()
+                });
+            if let Some(task) = candidate {
+                store.record_ping(&task.id, Utc::now().timestamp())?;
+            }
+            Ok(String::new())
+        }
+        Command::Time { id, month, gap } => {
+            let range = month.as_deref().map(month_range_local).transpose()?;
+            let tasks = match &id {
+                Some(id) => vec![store.load(id)?],
+                None => store.list()?,
+            };
+            let mut rows = Vec::new();
+            let mut total = 0;
+            for task in tasks {
+                let mut pings = store.pings(&task.id)?;
+                if let Some((start, end)) = range {
+                    pings.retain(|ping| *ping >= start && *ping < end);
+                }
+                let seconds = active_seconds(&pings, gap);
+                if seconds == 0 && id.is_none() {
+                    continue;
+                }
+                total += seconds;
+                rows.push(format!(
+                    "{:>8}  {}  [{}] {} · {}",
+                    human_duration(seconds),
+                    task.id,
+                    task.state,
+                    task.project,
+                    task.title
+                ));
+            }
+            let scope = month.map(|m| format!(" · {m}")).unwrap_or_default();
+            if rows.is_empty() {
+                return Ok(format!("ACTIVE TIME{scope}\n\nNo recorded time."));
+            }
+            let mut output = format!("ACTIVE TIME · gap {}m{scope}\n\n", gap / 60);
+            output.push_str(&rows.join("\n"));
+            output.push_str(&format!("\n{:>8}  total", human_duration(total)));
+            Ok(output)
         }
         Command::Resume { id, exec, list } => {
             let task = match id {
@@ -873,6 +1059,35 @@ mod tests {
 
         assert_eq!(canonical, "YourClinic");
         assert_eq!(fresh, "Landtop");
+    }
+
+    #[test]
+    fn active_seconds_merges_close_pings_and_drops_idle_gaps() {
+        // 0-60-120 is continuous work; 1000 starts a new burst ending 1030.
+        let pings = [0, 60, 120, 1000, 1030];
+        assert_eq!(active_seconds(&pings, 300), 150);
+        // an isolated ping contributes nothing
+        assert_eq!(active_seconds(&[42], 300), 0);
+        assert_eq!(active_seconds(&[], 300), 0);
+    }
+
+    #[test]
+    fn record_ping_dedupes_within_the_window() {
+        let directory = tempdir().unwrap();
+        let store = Store::new(directory.path());
+
+        assert!(store.record_ping("AW-0001", 1000).unwrap());
+        assert!(!store.record_ping("AW-0001", 1000 + PING_DEDUPE_SECONDS - 1).unwrap());
+        assert!(store.record_ping("AW-0001", 1000 + PING_DEDUPE_SECONDS).unwrap());
+
+        assert_eq!(store.pings("AW-0001").unwrap(), vec![1000, 1030]);
+    }
+
+    #[test]
+    fn human_duration_reads_naturally() {
+        assert_eq!(human_duration(30), "<1m");
+        assert_eq!(human_duration(45 * 60), "45m");
+        assert_eq!(human_duration(3 * 3600 + 12 * 60), "3h 12m");
     }
 
     #[test]

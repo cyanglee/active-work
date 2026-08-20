@@ -85,9 +85,22 @@ fn error_page(error: anyhow::Error) -> Response<Cursor<Vec<u8>>> {
 }
 
 pub fn tasks_json(store: &Store) -> Result<String> {
+    let mut tasks = Vec::new();
+    for task in store.list()? {
+        let pings = store.pings(&task.id).unwrap_or_default();
+        let mut value = serde_json::to_value(&task).context("could not serialize task")?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "time_seconds".to_owned(),
+                crate::active_seconds(&pings, 300).into(),
+            );
+            object.insert("last_ping".to_owned(), pings.last().copied().into());
+        }
+        tasks.push(value);
+    }
     let payload = serde_json::json!({
         "generated_at": Utc::now(),
-        "tasks": store.list()?,
+        "tasks": tasks,
     });
     serde_json::to_string(&payload).context("could not serialize tasks")
 }

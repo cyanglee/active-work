@@ -44,7 +44,16 @@ aw
 aw done CB-142 --summary "Verified and complete"
 
 aw list --all
+
+aw time                  # active time per task, merged from heartbeats
+aw time --month 2026-08  # one month only (local time)
 ```
+
+Active time comes from heartbeats: the PostToolUse hooks (see
+`integrations/`) run `aw ping` on every agent tool call, attributed to the
+task the conversation is writing via its session ID. Heartbeats closer than
+5 minutes merge into continuous work; larger gaps count as idle. Storage is
+plain local files under `$AW_HOME/heartbeats/`.
 
 ## Live views
 

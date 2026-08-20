@@ -25,6 +25,7 @@ echo "==> Linking Claude Code integration"
 link "$REPO/integrations/claude-skill" "$HOME/.claude/skills/aw"
 link "$REPO/integrations/hooks/aw-session-start.sh" "$HOME/.claude/hooks/aw-session-start.sh"
 link "$REPO/integrations/hooks/aw-stop-reminder.sh" "$HOME/.claude/hooks/aw-stop-reminder.sh"
+link "$REPO/integrations/hooks/aw-ping.sh" "$HOME/.claude/hooks/aw-ping.sh"
 
 if [ -d "$HOME/.codex" ]; then
   echo "==> Linking Codex integration"

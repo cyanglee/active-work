@@ -10,6 +10,7 @@ into place, so editing them here updates every agent at once:
 | `codex-skill/` | `~/.codex/skills/aw` | Codex skill (`$aw`), same rules adapted |
 | `hooks/aw-session-start.sh` | `~/.claude/hooks/` | Injects the worktree's tasks + integration rules at session start; shared by Claude and Codex (pass `codex` as the first argument) |
 | `hooks/aw-stop-reminder.sh` | `~/.claude/hooks/` | Blocks a stopping session once when its tasks are >30 min stale |
+| `hooks/aw-ping.sh` | `~/.claude/hooks/` | Heartbeat: records active time for the task this conversation is writing (shared by Claude and Codex). Wire it on PostToolUse (every tool call) AND UserPromptSubmit + Stop (turn boundaries), so a turn's lead-in and tail count too and totals converge with the agent's own "worked for N" number |
 
 ## Hook wiring (one-time, manual)
 
@@ -25,6 +26,10 @@ The hook scripts only run once they are registered. Add to
   "Stop": [
     { "hooks": [ { "type": "command",
       "command": "bash '<HOME>/.claude/hooks/aw-stop-reminder.sh'", "timeout": 10 } ] }
+  ],
+  "PostToolUse": [
+    { "matcher": "*", "hooks": [ { "type": "command",
+      "command": "bash '<HOME>/.claude/hooks/aw-ping.sh'", "timeout": 10, "async": true } ] }
   ]
 }
 ```

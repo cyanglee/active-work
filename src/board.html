@@ -110,6 +110,10 @@
   .side .act:hover { color:var(--working); border-color:var(--working); }
   .side .act.reopen:hover { color:var(--accent); border-color:var(--accent); }
   .side .act.armed { color:var(--error); border-color:var(--error); font-weight:700; }
+  .livedot { display:inline-block; width:8px; height:8px; border-radius:50%;
+             background:var(--working); animation:pulse 2s ease-out infinite; }
+  @keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--working) 55%, transparent); }
+                     70% { box-shadow:0 0 0 7px transparent; } 100% { box-shadow:0 0 0 0 transparent; } }
   @media (max-width: 980px) {
     .row { grid-template-columns:1fr; }
     .side { grid-column:1; grid-row:auto; }
@@ -171,6 +175,17 @@ function resumeCommand(task) {
 
 function byRecency(a, b) { return b.updated_at.localeCompare(a.updated_at); }
 
+function fmtDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+function isLive(task) {
+  return task.last_ping && (Date.now() / 1000 - task.last_ping) < 120;
+}
+
 // Two-step confirmation without confirm() dialogs: first click arms the
 // button (survives the 2s re-render via this map), second click executes.
 const armed = new Map();
@@ -229,7 +244,7 @@ function rowHtml(task, index) {
       <span class="text now${task.summary ? '' : ' empty'}">${esc(task.summary || '尚未記錄進度')}</span>
     </div>
     <div class="side">
-      <span>${age(task.updated_at)}</span>
+      <span>${age(task.updated_at)}${task.time_seconds ? ` · ⏱ ${fmtDuration(task.time_seconds)}` : ''}${isLive(task) ? ' <span class="livedot" title="agent 正在執行"></span>' : ''}</span>
       <span class="val">⎇ ${esc(task.branch || '—')}${task.dirty ? ' <span class="dirty">*</span>' : ''}</span>
       ${resume ? `<span class="val resume" title="點一下全選，複製後貼到 terminal">${esc(resume)}</span>` : ''}
       ${task.sessions && task.sessions.length > 1

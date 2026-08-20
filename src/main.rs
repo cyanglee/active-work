@@ -26,7 +26,9 @@ fn main() -> ExitCode {
         },
         command => match execute(command, &store, &current_dir) {
             Ok(output) => {
-                println!("{output}");
+                if !output.is_empty() {
+                    println!("{output}");
+                }
                 ExitCode::SUCCESS
             }
             Err(error) => fail(error),
