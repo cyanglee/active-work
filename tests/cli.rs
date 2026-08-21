@@ -156,6 +156,34 @@ fn start_allocates_an_id_and_current_resolves_it_by_worktree() {
 }
 
 #[test]
+fn time_groups_tasks_by_project_with_subtotals() {
+    let home = tempdir().unwrap();
+    let dirs = tempdir().unwrap();
+    let first = dirs.path().join("one");
+    let second = dirs.path().join("two");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    aw_in(home.path(), &first, &["start", "--project", "Alpha", "--title", "A"]);
+    aw_in(home.path(), &second, &["start", "--project", "Beta", "--title", "B"]);
+    let heartbeats = home.path().join("heartbeats");
+    std::fs::write(heartbeats.join("AW-0001.log"), "1000\n1100\n1200\n").unwrap();
+    std::fs::write(heartbeats.join("AW-0002.log"), "1000\n1060\n").unwrap();
+
+    let output = aw(home.path(), &["time"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+
+    assert!(text.contains("Alpha  —  3m"), "{text}");
+    assert!(text.contains("Beta  —  1m"), "{text}");
+    assert!(text.contains("4m  total"), "{text}");
+
+    let filtered = aw(home.path(), &["time", "--project", "alpha"]);
+    let text = stdout(&filtered);
+    assert!(text.contains("Alpha"), "{text}");
+    assert!(!text.contains("Beta"), "{text}");
+}
+
+#[test]
 fn concurrent_agents_receive_unique_ids() {
     let home = tempdir().unwrap();
     let worktrees = tempdir().unwrap();

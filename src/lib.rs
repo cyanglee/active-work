@@ -97,6 +97,9 @@ pub enum Command {
         /// Restrict to one month (YYYY-MM, local time).
         #[arg(long)]
         month: Option<String>,
+        /// Restrict to one project (case-insensitive).
+        #[arg(long)]
+        project: Option<String>,
         /// Seconds between heartbeats that still count as continuous work.
         #[arg(long, default_value_t = 300)]
         gap: i64,
@@ -774,26 +777,28 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
             }
             Ok(String::new())
         }
-        Command::Time { id, month, gap } => {
+        Command::Time {
+            id,
+            month,
+            project,
+            gap,
+        } => {
             let range = month.as_deref().map(month_range_local).transpose()?;
-            let tasks = match &id {
-                Some(id) => vec![store.load(id)?],
-                None => store.list()?,
-            };
-            let mut rows = Vec::new();
-            let mut total = 0;
-            for task in tasks {
+            let task_seconds = |task: &Task| -> Result<i64> {
                 let mut pings = store.pings(&task.id)?;
                 if let Some((start, end)) = range {
                     pings.retain(|ping| *ping >= start && *ping < end);
                 }
-                let seconds = active_seconds(&pings, gap);
-                if seconds == 0 && id.is_none() {
-                    continue;
-                }
-                total += seconds;
-                rows.push(format!(
-                    "{:>8}  {}  [{}] {} · {}",
+                Ok(active_seconds(&pings, gap))
+            };
+            let mut scope = month.map(|m| format!(" · {m}")).unwrap_or_default();
+
+            if let Some(id) = id {
+                let task = store.load(&id)?;
+                let seconds = task_seconds(&task)?;
+                return Ok(format!(
+                    "ACTIVE TIME · gap {}m{scope}\n\n{:>8}  {}  [{}] {} · {}",
+                    gap / 60,
                     human_duration(seconds),
                     task.id,
                     task.state,
@@ -801,12 +806,53 @@ pub fn execute(command: Option<Command>, store: &Store, current_dir: &Path) -> R
                     task.title
                 ));
             }
-            let scope = month.map(|m| format!(" · {m}")).unwrap_or_default();
-            if rows.is_empty() {
+
+            // Group by project (case-insensitive), newest activity first
+            // inside each group, with per-project subtotals.
+            let mut groups: Vec<(String, i64, Vec<String>)> = Vec::new();
+            let mut total = 0;
+            for task in store.list()? {
+                if let Some(filter) = &project
+                    && !task.project.eq_ignore_ascii_case(filter)
+                {
+                    continue;
+                }
+                let seconds = task_seconds(&task)?;
+                if seconds == 0 {
+                    continue;
+                }
+                total += seconds;
+                let row = format!(
+                    "{:>8}  {}  [{}] {}",
+                    human_duration(seconds),
+                    task.id,
+                    task.state,
+                    task.title
+                );
+                match groups
+                    .iter_mut()
+                    .find(|(name, ..)| name.eq_ignore_ascii_case(&task.project))
+                {
+                    Some((_, subtotal, rows)) => {
+                        *subtotal += seconds;
+                        rows.push(row);
+                    }
+                    None => groups.push((task.project.clone(), seconds, vec![row])),
+                }
+            }
+            if let Some(filter) = project {
+                scope.push_str(&format!(" · {filter}"));
+            }
+            if groups.is_empty() {
                 return Ok(format!("ACTIVE TIME{scope}\n\nNo recorded time."));
             }
-            let mut output = format!("ACTIVE TIME · gap {}m{scope}\n\n", gap / 60);
-            output.push_str(&rows.join("\n"));
+            groups.sort_by(|left, right| right.1.cmp(&left.1));
+            let mut output = format!("ACTIVE TIME · gap {}m{scope}\n", gap / 60);
+            for (name, subtotal, rows) in &groups {
+                output.push_str(&format!("\n{name}  —  {}\n", human_duration(*subtotal)));
+                output.push_str(&rows.join("\n"));
+                output.push('\n');
+            }
             output.push_str(&format!("\n{:>8}  total", human_duration(total)));
             Ok(output)
         }
